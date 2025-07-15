@@ -1,0 +1,205 @@
+// ==UserScript==
+// @name         copy tf2 trade history to you spreadsheet
+// @namespace    http://tampermonkey.net/
+// @version      2.3
+// @description  Export TF2 trade items with correct given/received split and wear sort. Includes effects, spells, KS, and more.
+// @author       Trefix
+// @match        https://steamcommunity.com/profiles/*/tradehistory/*
+// @grant        GM_setClipboard
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    const wearOrder = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred'];
+    const ksTiers = ['Professional Killstreak', 'Specialized Killstreak', 'Killstreak'];
+
+    function waitForTrades() {
+        const iv = setInterval(() => {
+            const trades = document.querySelectorAll('.tradehistoryrow');
+            if (trades.length > 0) {
+                clearInterval(iv);
+                addExportButtons(trades);
+            }
+        }, 1000);
+    }
+
+    function addExportButtons(trades) {
+        trades.forEach(trade => {
+            if (trade.querySelector('.export-trade-btn')) return;
+
+            const btn = document.createElement('button');
+            btn.className = 'export-trade-btn';
+            btn.innerText = '📋 Export';
+            Object.assign(btn.style, {
+                marginLeft: '10px',
+                padding: '3px 8px',
+                fontSize: '12px',
+                backgroundColor: '#5c7e10',
+                color: 'white',
+                border: 'none',
+                borderRadius: '3px',
+                cursor: 'pointer',
+                float: 'right'
+            });
+
+            btn.onclick = () => exportGroupedSortedItems(trade);
+
+            const header = trade.querySelector('.tradehistory_event_description') || trade.querySelector('.tradehistory_date');
+            if (header) header.appendChild(btn);
+        });
+    }
+
+    async function exportGroupedSortedItems(trade) {
+        const description = trade.querySelector('.tradehistory_event_description')?.innerText.toLowerCase();
+        const itemContainers = trade.querySelectorAll('.tradehistory_items');
+
+        let yourItemsIndex = 0;
+        if (description?.includes('you received')) {
+            yourItemsIndex = 1;
+        }
+
+        const itemGroups = { given: [], received: [] };
+
+        const waitForTooltip = () => new Promise(resolve => {
+            const start = Date.now();
+            const check = () => {
+                const tooltip = document.querySelector('#hover_item_name')?.textContent?.trim();
+                const desc = document.querySelector('#hover_item_descriptors');
+                if (tooltip && desc && desc.querySelector('.descriptor')) {
+                    resolve({
+                        name: tooltip,
+                        desc
+                    });
+                } else if (Date.now() - start > 1500) {
+                    resolve(null); // timeout fallback
+                } else {
+                    setTimeout(check, 50);
+                }
+            };
+            check();
+        });
+
+        for (let i = 0; i < itemContainers.length && i < 2; i++) {
+            const side = (i === yourItemsIndex) ? 'given' : 'received';
+            const items = itemContainers[i].querySelectorAll('.history_item');
+
+            for (const item of items) {
+                item.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+
+                const tooltipData = await waitForTooltip();
+
+                let baseName = 'Unknown Item';
+                if (tooltipData?.name) {
+                    baseName = tooltipData.name;
+                } else {
+                    baseName = item.querySelector('.history_item_name')?.textContent.trim()
+                        || 'Unknown Item';
+                }
+
+                const qtyBadge = item.querySelector('.item_quantity_label')?.textContent.trim();
+                const quantity = qtyBadge && qtyBadge.startsWith('x') ? parseInt(qtyBadge.slice(1)) : 1;
+
+                let wear = '';
+                let effect = '';
+                let ksTier = '';
+                let sheen = '';
+                let ksEffect = '';
+                let spell = '';
+
+                if (tooltipData?.desc) {
+                    const lines = tooltipData.desc.querySelectorAll('.descriptor');
+                    for (const line of lines) {
+                        const text = line.textContent.trim();
+
+                        const wearMatch = text.match(/\((factory new|minimal wear|field-tested|well-worn|battle-scarred)\)/i);
+                        if (wearMatch) {
+                            const w = wearMatch[1].toLowerCase();
+                            const wearMap = {
+                                'factory new': 'Factory New',
+                                'minimal wear': 'Minimal Wear',
+                                'field-tested': 'Field-Tested',
+                                'well-worn': 'Well-Worn',
+                                'battle-scarred': 'Battle-Scarred'
+                            };
+                            wear = wearMap[w];
+                        }
+
+                        if (/^(Unusual Effect|Effect):/i.test(text)) {
+                            effect = text.split(':')[1].trim();
+                        }
+
+                        for (const tier of ksTiers) {
+                            if (text.includes(tier)) ksTier = tier;
+                        }
+
+                        if (/Sheen:/i.test(text)) {
+                            sheen = text.split(':')[1].trim();
+                        }
+
+                        if (/Killstreak:/i.test(text)) {
+                            ksEffect = text.split(':')[1].trim();
+                        }
+
+                        if (/Spell:|Voices from Below|Hot|Exorcism|Spectral|Halloween/i.test(text)) {
+                            spell = text;
+                        }
+                    }
+                }
+
+                let label = baseName;
+                const parts = [];
+                if (wear) parts.push(wear);
+                if (effect) parts.push(`Effect: ${effect}`);
+                if (ksTier) parts.push(ksTier);
+                if (sheen) parts.push(`Sheen: ${sheen}`);
+                if (ksEffect) parts.push(`Killstreak: ${ksEffect}`);
+                if (spell) parts.push(`Spell: ${spell}`);
+                if (parts.length > 0) label += ` [${parts.join(', ')}]`;
+
+                itemGroups[side].push({ label, quantity, wear });
+            }
+        }
+
+        function getWearRank(wear) {
+            return wearOrder.indexOf(wear) !== -1 ? wearOrder.indexOf(wear) : wearOrder.length;
+        }
+
+        function groupAndSort(items) {
+            const map = new Map();
+            for (const { label, quantity } of items) {
+                map.set(label, (map.get(label) || 0) + quantity);
+            }
+
+            return [...map.entries()].sort((a, b) => {
+                // Sort by name alphabetically first
+                const nameA = a[0].replace(/\s\[.*$/, '');
+                const nameB = b[0].replace(/\s\[.*$/, '');
+                if (nameA !== nameB) return nameA.localeCompare(nameB);
+
+                // Then sort by wear if present
+                const wearA = (a[0].match(/\[(.*?)\]/)?.[1] || '').match(/(Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)/);
+                const wearB = (b[0].match(/\[(.*?)\]/)?.[1] || '').match(/(Factory New|Minimal Wear|Field-Tested|Well-Worn|Battle-Scarred)/);
+                const rankA = getWearRank(wearA?.[1] || '');
+                const rankB = getWearRank(wearB?.[1] || '');
+                return rankA - rankB;
+            });
+        }
+
+        const givenGrouped = groupAndSort(itemGroups.given);
+        const receivedGrouped = groupAndSort(itemGroups.received);
+
+        const output = [
+            '=== GIVEN ===',
+            ...givenGrouped.map(([label, count]) => `${label} x${count}`),
+            '',
+            '=== RECEIVED ===',
+            ...receivedGrouped.map(([label, count]) => `${label} x${count}`)
+        ];
+
+        GM_setClipboard(output.join('\n'), 'text');
+        alert(`✅ Exported ${givenGrouped.length + receivedGrouped.length} item(s) to clipboard.`);
+    }
+
+    waitForTrades();
+})();
