@@ -1,0 +1,121 @@
+// ==UserScript==
+// @name         $linker
+// @namespace    eeek
+// @version      1.0.0
+// @description  makes trading easier
+// @author       eeek
+// @match        https://steamcommunity.com/id/*/inventory*
+// @match        https://steamcommunity.com/profiles/*/inventory*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=steamcommunity.com
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    let currentPageIndex = 0;
+    const pageChangers = [document.querySelector('.pagecontrol_element'), document.querySelectorAll('.pagecontrol_element')[2]];
+    pageChangers.forEach(pageChanger => {
+        pageChanger.addEventListener('click', function() {
+            setTimeout(function() {
+                currentPageIndex = window.g_ActiveInventory.m_iCurrentPage;
+                pageHandler(currentPageIndex)
+            },260);
+        });
+    })
+
+    const pageHandler = (currentPageIndex) => {
+        const activePage = document.querySelectorAll('.inventory_page_left .inventory_page')[currentPageIndex];
+        const itemIcons = activePage.querySelectorAll('.inventory_item_link');
+        [...itemIcons].forEach(item => {
+            item.addEventListener('click', function() {
+                const currentIndex = Number(window.iActiveSelectView);
+                itemHandler(item, currentIndex)
+            })
+        })
+    }
+    const itemHandler = (item, index) => {
+        const activeRightPanel = document.querySelector(`.inventory_page_right #iteminfo${index}`);
+        const clickableName = activeRightPanel.querySelector(`#iteminfo${index}_item_name`);
+
+        const defaultLinkContainer = activeRightPanel.querySelector('.item_desc_icon_center');
+
+        clickableName.style.position = 'relative';
+
+        if (clickableName.querySelector('a')) clickableName.querySelector('a').remove();
+        if (defaultLinkContainer.querySelector('a')) defaultLinkContainer.querySelector('a').remove();
+
+
+        const href = linkGenerator(item);
+        const defHref = linkGenerator(item, true);
+
+        if (href === null) return;
+        const link = document.createElement('a');
+        const defLink = document.createElement('a');
+
+        link.classList.add('marketplace-link');
+        defLink.classList.add('marketplace-link');
+
+        link.href = href;
+        link.style = 'width: 100%; height: 100%; position: absolute; left: 0; top: 0';
+        defLink.href = defHref;
+        defLink.innerText = 'View default skin';
+
+        link.setAttribute('target', '_blank');
+        defLink.setAttribute('target', '_blank');
+
+        clickableName.append(link);
+        defaultLinkContainer.append(defLink);
+    }
+
+    const linkGenerator = (item, def = false) => {
+        const inventoryPath = window.g_rgAppContextData['440'].rgContexts['2'].inventory.m_rgAssets[item.getAttribute('href').replace('#440_2_', '')];
+        const itemName = inventoryPath.description.market_hash_name;
+        if (!inventoryPath.description.tags.some(tag => tag.category === 'Exterior') ||inventoryPath.description.tags.some(tag => tag.localized_tag_name === 'Unusual') || inventoryPath.description.tradable !== 1) return null;
+
+        if (def) return 'https://marketplace.tf/items/tf2/' + defaultizeTheName(itemName);
+        return 'https://marketplace.tf/items/tf2/' + mpifyTheName(itemName);
+    }
+
+    const mpifyTheName = (itemName) => {
+        if (itemName.includes("Strange Festivized")) {
+            itemName = itemName.replace("Strange Festivized", "Festivized");
+        }
+
+        if (itemName.includes("Strange Professional Killstreak")) {
+            itemName = itemName.replace(
+                "Strange Professional Killstreak",
+                "Professional Strange"
+            );
+        }
+        if (itemName.includes("Professional Killstreak")) {
+            itemName = itemName.replace("Professional Killstreak", "Professional");
+        } else if (itemName.includes("Specialized Killstreak")) {
+            itemName = itemName.replace("Specialized Killstreak", "Specialized");
+        } else if (itemName.includes("Killstreak")) {
+            itemName = itemName.replace("Killstreak", "Basic Killstreak");
+        }
+        return itemName;
+    }
+
+    const defaultizeTheName = (itemName) => {
+        let name = mpifyTheName(itemName);
+
+        if (name.includes('Professional ')) name = name.replace('Professional ', '');
+        if (name.includes('Specialized ')) name = name.replace('Specialized ', '');
+        if (name.includes('Basic Killstreak ')) name = name.replace('Basic Killstreak ', '');
+
+        if (!(name.includes('Professional ') || name.includes('Specialized ') || name.includes('Basic Killstreak ')) && name.includes('Festivized ')) name = name.replace('Festivized ', '');
+        return name;
+    }
+
+    setTimeout(() => pageHandler(currentPageIndex), 500);
+
+    const styles = document.createElement('style');
+    styles.innerHTML = `
+    .marketplace-link:hover {
+        background-color: rgba(255,255,255, 0.2);
+        border-radius: 5px
+    }
+    `
+    document.head.append(styles);
+
+})();
